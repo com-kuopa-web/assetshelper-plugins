@@ -95,6 +95,33 @@ node scripts/update-catalog.mjs --dir dist-plugins --catalog plugin-catalog.json
 
 装好后：设置里的 FFmpeg 行应显示「来源：插件包 · 版本 · 许可证 · 编码器」；视频转码/截帧即可用。
 
+### 3.5 核对"清单里写的"与"真的那份产物"（`verify-release.mjs`）
+
+`update-catalog.mjs` 是拿**本地那份 zip** 算 sha256 写进清单的 —— 它信任本地文件。
+而"上传到 Release 之后，用户下到的到底是不是同一份字节"**没人回读**，所以补了一个核对脚本：
+
+```bash
+# ① 离线：清单 vs 本地 zip（发布**前**跑；CI 里已经自动跑了这一步，在提交清单之前）
+node scripts/verify-release.mjs --dir dist-plugins
+
+# ② 在线：逐个下载清单里的 downloadUrl 再核对（发布**后**手动跑）
+node scripts/verify-release.mjs --url --repo com-kuopa-web/assets-plugins --tag ffmpeg-7.1.5
+
+# ③ 自检（负向对照）：造一份**故意篡改**的夹具，断言"必须被抓到"（零网络）
+node scripts/verify-release.mjs --self-test
+```
+
+口径（否则会天天误报）：
+
+| 情况 | 默认 | `--strict` |
+|---|---|---|
+| 清单条目在本地/线上找不到对应产物 | **跳过**并说原因（清单里可能留着历史版本） | 失败 |
+| 目录里有 zip **不在**清单里 | 警告 | 失败 |
+| sha256 或 size 不一致 | **失败**（退出码 1） | 失败 |
+
+> ⚠️ `--dir` 比的是**本地目录里的那份**。若清单来自 CI 发布、而本地是**另一次构建**，
+> 两者本来就不该相同 —— 这个模式用在"刚构建完、还没上传"那一步。
+
 ### 4. 发布（CI 出全平台包）
 
 ```bash

@@ -104,9 +104,10 @@ jobs:
       #
       # ⚠️ 这里有两个"Node 版本"，别混淆：
       #   · `uses: ...@v5` 里的 v5 = **action 自身**跑在哪个 Node（v5 → node24，见下）
-      #   · `node-version: '20'` = 给**我们的构建脚本**装的 Node（与 action 运行时无关）
+      #   · `node-version: '24'` = 给**我们的构建脚本**装的 Node（与 action 运行时无关）
+      #     2026-09-26 由 '20' 升上来：20 已 EOL，且它与其它 workflow（22）不一致
       - uses: actions/setup-node@v5
-        with: { node-version: '20' }
+        with: { node-version: '24' }
 
       # ---------- 工具链 ----------
       - name: 工具链（Windows / MSYS2 MINGW64）
@@ -204,7 +205,7 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
       - uses: actions/setup-node@v5
-        with: { node-version: '20' }
+        with: { node-version: '24' }
       - uses: actions/download-artifact@v7
         with: { path: dist-plugins, merge-multiple: true }
 
@@ -238,6 +239,12 @@ jobs:
             --catalog plugin-catalog.json \
             --repo "${{ github.repository }}" \
             --tag "${{ steps.meta.outputs.tag }}"
+
+          # 提交前先核对：清单里写的 sha256/size 与**刚构建出来的 zip** 是否一致。
+          # 这里是最该失败的时刻 —— 一旦提交并 push，线上清单就指向了这份产物。
+          # （`--url` 那个"回读 Release"的模式留给发布后手动跑：它要联网、要资产已经可下载。）
+          node scripts/verify-release.mjs --dir dist-plugins --catalog plugin-catalog.json
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add plugin-catalog.json
