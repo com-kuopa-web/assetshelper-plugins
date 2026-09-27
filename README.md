@@ -1,4 +1,4 @@
-# assets-plugins —— AssetsHelper 官方资产插件（插件）分发仓库
+# assetshelper-plugins —— AssetsHelper 官方资产插件（插件）分发仓库
 
 本仓库是 **公开的插件分发源**：App 在「设置 → 播放 → FFmpeg → 插件源」里指向本仓库的
 `plugin-catalog.json`（留空即用内置官方源），即可按需下载 / 校验 / 安装插件。
@@ -77,13 +77,54 @@ node scripts/build-ffmpeg-plugin.mjs \
 
 # ③ 只更新清单（不发布）
 node scripts/update-catalog.mjs --dir dist-plugins --catalog plugin-catalog.json \
-  --repo <owner>/assets-plugins --tag ffmpeg-7.1.5
+  --repo <owner>/assetshelper-plugins --tag ffmpeg-7.1.5
 ```
 
 要点：
 - `--require-lgpl` 是**硬门槛**：检测到 GPL / `--enable-nonfree` 构建直接失败，防止把不合规二进制发出去；
 - 构建脚本结尾还会再查一次 `ffmpeg -version` 的 configure 行，确认没有 `--enable-gpl/--enable-nonfree`；
 - 想锁定源码校验和：`FFMPEG_SRC_SHA256=<官方 tar.xz 的 sha256> bash scripts/build-lgpl-ffmpeg.sh 7.1.5`。
+
+#### Windows QSV 变体（`ENABLE_QSV=1`）
+
+QSV 是 Intel 核显的硬件编解码。开关是 `--enable-libvpl`（**没有** `--enable-qsv` 这个东西）：
+
+```bash
+# 只做体检：平台/QSV/oneVPL 能不能满足（**不下载、不编译**，几毫秒返回）
+PREFLIGHT_ONLY=1 ENABLE_QSV=1 bash scripts/build-lgpl-ffmpeg.sh
+
+# 真编（MSYS2 MINGW64；先装 oneVPL）
+pacman -S --needed --noconfirm mingw-w64-x86_64-onevpl
+ENABLE_QSV=1 bash scripts/build-lgpl-ffmpeg.sh 7.1.5
+
+# 打包：必须带 --require-qsv，以及脚本收集到的运行库（名字见 .build/RUNTIME-FILES.txt）
+node scripts/build-ffmpeg-plugin.mjs \
+  --bin .build/out/bin/ffmpeg.exe \
+  --license licenses/COPYING.LGPLv2.1 --license licenses/oneVPL-LICENSE.txt \
+  --require-lgpl --require-qsv \
+  --runtime .build/out/bin/libvpl-2.dll \
+  --version 7.1.5 --out dist-plugins
+```
+
+`ENABLE_QSV=1` 是**硬要求**，不是"尽量" —— 三处都会**直接失败**，不会静默降级：
+
+| 环节 | 拦什么 |
+|---|---|
+| 「0) 预检」 | 找不到 oneVPL → 失败（**不再**"打印警告然后照样编"）；非 Windows 平台也失败（Linux 的 QSV 还没实现） |
+| 「4b」 | 编完探测产物，**没有 `h264_qsv`** → 失败（判据是**探测结果**，不看 configure 行有没有 `--enable-libvpl`） |
+| `--require-qsv` | 打包时再以探测结果为准卡一次，防止"一份没有 QSV 的包被当成 QSV 版发出去" |
+
+**运行库**：`--enable-libvpl` 会不会让产物依赖 DLL，**只有读二进制的导入表才知道** ——
+所以构建脚本用 `objdump -p` 判断，**动态依赖时**才把 DLL 拷到 `ffmpeg` 同目录并写进
+`.build/RUNTIME-FILES.txt`（打包步骤照这个清单传 `--runtime`）。写死文件名会同时错在两个方向：
+静态链接时白带一个 DLL，动态链接时整个漏掉。
+
+打包结束会**回读 zip 逐条核对**（`scripts/verify-package-zip.mjs`）：缺 `bin/<运行库>`、
+缺许可证、zip 读不出来 —— 任一情况**直接失败**，**不产出** `.sha256` 与清单片段
+（绝不照着一份没验过的包写清单）。
+
+同一平台**只发一份包**（清单按 `id+平台+架构` 取一条）。带不带 QSV 体现在**这份包的能力**上：
+包内 `build-info.json` 有实测的 `hardware` 字段，App 的「设置 → 关于」页也会显示随包运行库与它的 sha256。
 
 ### 3. 本地验证（不用发布）
 
@@ -151,7 +192,8 @@ CI（`.github/workflows/release-ffmpeg.yml`）会在 4 个 runner 上各自**自
 | `nasm not found` | 缺汇编器：macOS `brew install nasm`；MSYS2 `pacman -S nasm` |
 | `configure: error: pkg-config not found` | 装 `pkg-config` / MSYS2 里是 `pkgconf` |
 | 构建完发现 configure 行里有 `--enable-gpl` | 说明用了外部库的 GPL 版本（如 full 模式链了 x264）—— **不要分发**，检查 `FULL` 依赖 |
-| Windows 产物报缺 DLL | 脚本已加 `--extra-ldexeflags=-static --pkg-config-flags=--static`；若仍缺，确认用的是 MINGW64 终端（不是 MSYS 终端） |
+| Windows 产物报缺 DLL | 脚本已加 `--extra-ldexeflags=-static --pkg-config-flags=--static`；若仍缺，确认用的是 MINGW64 终端（不是 MSYS 终端）。**开 QSV 时** oneVPL 的 DLL 是**故意**随包发的（`--enable-libvpl` 要链接运行库）：构建脚本用 `objdump` 判断产物是否真的动态依赖它，是的话拷到 `ffmpeg` 同目录、写 `.build/RUNTIME-FILES.txt`，打包步骤按这个清单传 `--runtime`；打包完还会**回读 zip 核对它在不在**。用户端想确认，看「设置 → 关于 → 第三方软件」里的**随包运行库**那一行 |
+| **QSV 版装了但转码还是慢/不可用**（怀疑包里没有 QSV） | 「设置 → 关于 → 第三方软件」看 `build-info.json` 的**硬件编码（实测）**；命令行可自行核对：`ffmpeg -hide_banner -encoders \| grep h264_qsv`。**发布侧**这种事已经有三道闸门拦着（预检 /「4b」/ `--require-qsv`），判据都是**探测结果**而不是 configure 行里的 `--enable-libvpl` |
 | macOS 上没有硬件编码器 | 确认 configure 行含 `--enable-videotoolbox`（脚本在 macOS 自动加） |
 | 没有软件 H.264 编码（提示无法转码） | LGPL 构建**本来就没有 libx264**：靠 VideoToolbox/NVENC/QSV/AMF 硬件编码，或 `-c copy` 直通；无硬件时只能不转码 |
 | CI 里 `zip`/`Compress-Archive` 失败 | 打包脚本会自动尝试 `zip` → PowerShell，两者都没有时只产出目录（手动压缩即可） |
@@ -161,7 +203,7 @@ CI（`.github/workflows/release-ffmpeg.yml`）会在 4 个 runner 上各自**自
 ## 二、目录
 
 ```
-assets-plugins/
+assetshelper-plugins/
 ├── plugin-catalog.json                     # ★ App 拉取的清单（CI 自动更新）
 ├── .github/workflows/release-ffmpeg.yml    # 打 tag / 手动触发即发布（三平台自建）
 ├── .github/workflows/publish-plugins.yml   # ★ 发布**官方界面插件**（按 id / 组 / 全部，见 §二·2）
@@ -169,6 +211,8 @@ assets-plugins/
 │   ├── build-lgpl-ffmpeg.sh                # 官方源码 → 验签/记 sha256 → 自建 LGPL（macOS/Linux/MSYS2 通用）
 │   ├── build-local.sh                      # ★ 本机一条命令：构建 + 打包 + 打印验证/发布方式
 │   ├── build-ffmpeg-plugin.mjs             # 插件打包器（vendor：以 AssetsHelper/scripts/ 为主副本，改那边再复制过来）
+│   ├── verify-package-zip.mjs              # 包内容断言：回读 zip 逐条核对（vendor，同上；也可独立当命令行用）
+│   ├── verify-release.mjs                  # 核对"清单里写的 sha256"与**真的那份产物**（发布前 CI 自动跑 / 发布后 --url）
 │   ├── publish-plugins.mjs                 # ★ 发布官方界面插件：传 Release 附件 + 幂等合并清单（不依赖 gh）
 │   ├── check-shell-expansions.mjs          # shell 体检：禁止 "$VAR 紧跟中文"（UTF-8 locale 坑）
 │   ├── check-node-paths.mjs                # Node 体检：禁止 new URL(import.meta.url).pathname（Windows 双盘符）
@@ -198,7 +242,7 @@ zip 作为 **Release 附件**、清单条目写进 `plugin-catalog.json`。区�
 cd ../AssetsHelper && yarn plugin:build
 
 # 2) 看计划（不联网、不写文件）
-cd ../assets-plugins
+cd ../assetshelper-plugins
 node scripts/publish-plugins.mjs --dir ../AssetsHelper/dist-plugins --only official.model --tag plugins-1.0.0 --dry-run
 
 # 3) 真发（上传需要 GITHUB_TOKEN/GH_TOKEN，contents: write）
@@ -219,7 +263,7 @@ GITHUB_TOKEN=… node scripts/publish-plugins.mjs --dir ../AssetsHelper/dist-plu
 `--dry-run` 不联网不写文件；不带 `--tag` 不允许真发（清单里的 `downloadUrl` 必须真实可下载）；
 `--all` 会**排除宿主自有插件**（`official.filelist`，见 AssetsHelper 的 `src/shared/plugin-policy.ts`）并在输出里说明。
 
-> ⚠️ **发布需要一个 secret**：workflow 要读两个**私有**源码仓（`AssetsHelper`、`assets-plugins-official`）
+> ⚠️ **发布需要一个 secret**：workflow 要读两个**私有**源码仓（`AssetsHelper`、`assetshelper-plugins-official`）
 > → 在**本仓库**的 Actions secrets 里加 `CI_SSH_KEY`（一把只读、能读这两个仓的 key）。
 > 建 Release 与提交清单用默认 `GITHUB_TOKEN` 即可（`permissions: contents: write`），不需要额外 PAT。
 
@@ -243,4 +287,11 @@ ffmpeg.org 官方下载页写明：**“FFmpeg only provides source code.”**
 - Release 中的 **FFmpeg 二进制**：由 FFmpeg 项目提供，按对应构建的许可证（默认 **LGPL-2.1-or-later**）分发；
   每个插件包内含 `licenses/`（来自官方源码树）与 `THIRD-PARTY-NOTICES.md`
   （版本、configure 行、源码获取方式、如何替换）。
+- **QSV 那格（Windows x64）另有一个依赖**：oneVPL（`libvpl`，Intel，**MIT 类**）。
+  `--enable-libvpl` 让产物依赖它，所以包里会多出 `bin/libvpl-2.dll` 与
+  `licenses/oneVPL-LICENSE.txt`（**构建时**从 MSYS2 的 oneVPL 包里取出原文 —— 找不到就**构建失败**，
+  而不是发一份没有声明的包）。该 DLL 的 sha256 记在包内 `build-info.json` 的 `runtimeFiles` 里，
+  「设置 → 关于」页也会显示，供用户核对。
+  同一平台的包**只有一份**（清单按 `id+平台+架构` 取一条）—— 带不带 QSV 是**这一份包的能力**，
+  不是两个变体。
 - 源码获取：`https://ffmpeg.org/releases/ffmpeg-<version>.tar.xz`。

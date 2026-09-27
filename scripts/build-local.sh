@@ -99,5 +99,5 @@ cat <<TIP
 
 只想先本地出一份清单（不发布）：
   node scripts/update-catalog.mjs --dir dist-plugins --catalog plugin-catalog.json \\
-       --repo <owner>/assets-plugins --tag ffmpeg-${VERSION}
+       --repo <owner>/assetshelper-plugins --tag ffmpeg-${VERSION}
 TIP

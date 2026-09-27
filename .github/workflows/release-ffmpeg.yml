@@ -88,6 +88,11 @@ jobs:
           - os: windows-latest
             platform: win32
             arch: x64
+            # ★ 只有这一格开 QSV（Intel 核显的硬解硬编，Windows 上最常见的可用硬件编码）。
+            #   为什么要按格子开关而不是"Windows 就开"：`--enable-libvpl` 会让产物**依赖
+            #   oneVPL 的运行库**（不再是单文件），于是打包必须把 DLL 一起收进去。
+            #   这是一次有意识的取舍，不是一个可以顺手打开的默认值。
+            qsv: true
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     defaults:
@@ -125,10 +130,24 @@ jobs:
             tar
             xz
             mingw-w64-x86_64-toolchain
-      - name: 硬件编码头文件（Windows 可选：NVENC / QSV / AMF）
+      # ---------- 硬件编码头文件 ----------
+      # NVENC / AMF 是**只要头文件 + 运行期 dlopen**，装不上也不该让整个构建失败
+      # （产物仍可转码：VideoToolbox / QSV / 或用户换一份带 libx264 的），所以 continue-on-error。
+      - name: 硬件编码头文件（Windows 可选：NVENC / AMF 的头文件）
         if: matrix.os == 'windows-latest'
         continue-on-error: true
-        run: pacman -S --needed --noconfirm mingw-w64-x86_64-ffnvcodec-headers mingw-w64-x86_64-onevpl mingw-w64-x86_64-amf-headers
+        run: pacman -S --needed --noconfirm mingw-w64-x86_64-ffnvcodec-headers mingw-w64-x86_64-amf-headers
+
+      # ⚠️ oneVPL **不能** continue-on-error：它是这一格里 QSV 的前提。
+      #    以前它跟上面挤在同一行、又带 continue-on-error，于是"装失败"只会留下一句
+      #    `⚠️ 跳过 QSV`，最后照样产出一份**没有 QSV 的 QSV 版**发出去。
+      #    现在这里装不上就直接红（build-lgpl-ffmpeg.sh 的预检与打包的 --require-qsv 还会各拦一道）。
+      - name: oneVPL（Windows QSV 必需）
+        if: matrix.qsv
+        run: |
+          pacman -S --needed --noconfirm mingw-w64-x86_64-onevpl
+          echo "--- 装完先确认 pkg-config 看得到（否则后面必然失败，不如在这一步说清）---"
+          pkg-config --modversion vpl
 
       - name: 依赖（macOS）
         if: startsWith(matrix.os, 'macos-')
@@ -159,9 +178,12 @@ jobs:
           node scripts/check-node-paths.mjs
 
       # ---------- 自建（三平台同一脚本） ----------
+      # ENABLE_QSV=1 在这条链上是**硬要求**：脚本会在下载源码之前就检查 oneVPL，
+      # 编完还会核对产物里真的有 h264_qsv（见 build-lgpl-ffmpeg.sh 的「0) 预检」与「4b」）。
       - name: 自建 LGPL ffmpeg
         env:
           FULL: ${{ github.event.inputs.full == 'true' && '1' || '0' }}
+          ENABLE_QSV: ${{ matrix.qsv && '1' || '0' }}
         run: bash scripts/build-lgpl-ffmpeg.sh "${{ steps.meta.outputs.version }}"
 
       # ---------- 打包（Windows 用系统 node，不依赖 MSYS2） ----------
@@ -169,9 +191,19 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           V="${{ steps.meta.outputs.version }}"
+          # 与 Windows 那一步**同样的口径**（运行库清单可空；QSV 目前只有 Windows 开，
+          # 但两边的写法保持一致，免得以后给某个平台开 QSV 时忘了把这几行补上）
+          RT=()
+          if [ -f .build/RUNTIME-FILES.txt ]; then
+            while IFS= read -r n; do
+              [ -n "$n" ] && RT+=(--runtime ".build/out/bin/$n")
+            done < .build/RUNTIME-FILES.txt
+          fi
+          LIC=(--license licenses/COPYING.LGPLv2.1)
+          [ -f licenses/oneVPL-LICENSE.txt ] && LIC+=(--license licenses/oneVPL-LICENSE.txt)
           node scripts/build-ffmpeg-plugin.mjs \
             --bin ".build/out/bin/ffmpeg" \
-            --license licenses/COPYING.LGPLv2.1 \
+            ${LIC[@]+"${LIC[@]}"} ${RT[@]+"${RT[@]}"} \
             --version "$V" --out dist-plugins --require-lgpl
           mv dist-plugins/official.ffmpeg-$V.zip dist-plugins/official.ffmpeg-$V-${{ matrix.platform }}-${{ matrix.arch }}.zip
           ls -lh dist-plugins/*.zip
@@ -180,9 +212,28 @@ jobs:
         shell: pwsh
         run: |
           $V = "${{ steps.meta.outputs.version }}"
+          # 逐行读 build-lgpl-ffmpeg.sh 收集好的运行库清单（QSV 时是 oneVPL 的 DLL）。
+          # 为什么由脚本给清单、而不是在这里写死 `libvpl-2.dll`：
+          # 产物到底是"动态依赖"还是"静态链接进去了"，只有读二进制的导入表才知道 ——
+          # 那个判断在构建脚本里用 objdump 做（见 4c），这里只负责传下去。
+          $runtimeArgs = @()
+          if (Test-Path .build/RUNTIME-FILES.txt) {
+            foreach ($name in (Get-Content .build/RUNTIME-FILES.txt | Where-Object { $_.Trim() })) {
+              $runtimeArgs += @('--runtime', ".build/out/bin/$($name.Trim())")
+            }
+          }
+          # QSV 那格必须带 --require-qsv：它会让打包在"产物里没有 h264_qsv"时**直接失败**，
+          # 而不是把一份没有 QSV 的包当成 QSV 版发出去。
+          $qsvArgs = @()
+          if ("${{ matrix.qsv }}" -eq "true") { $qsvArgs += '--require-qsv' }
+          $licArgs = @('--license', 'licenses/COPYING.LGPLv2.1')
+          if (Test-Path licenses/oneVPL-LICENSE.txt) {
+            $licArgs += @('--license', 'licenses/oneVPL-LICENSE.txt')
+          }
+          Write-Host "运行库参数：$($runtimeArgs -join ' ') / QSV 闸门：$($qsvArgs -join ' ')"
           node scripts/build-ffmpeg-plugin.mjs `
             --bin ".build/out/bin/ffmpeg.exe" `
-            --license licenses/COPYING.LGPLv2.1 `
+            @licArgs @runtimeArgs @qsvArgs `
             --version "$V" --out dist-plugins --require-lgpl
           Move-Item "dist-plugins/official.ffmpeg-$V.zip" "dist-plugins/official.ffmpeg-$V-${{ matrix.platform }}-${{ matrix.arch }}.zip" -Force
           Get-ChildItem dist-plugins/*.zip

@@ -133,7 +133,7 @@ async function digestOfFile(p) {
 /** 下载并摘要（跟随重定向；GitHub Release 会 302 到 objects.githubusercontent.com） */
 function digestOfUrl(url, redirectsLeft = 5) {
   return new Promise((res, rej) => {
-    get(url, { headers: { 'user-agent': 'assets-plugins-verify-release' } }, (r) => {
+    get(url, { headers: { 'user-agent': 'assetshelper-plugins-verify-release' } }, (r) => {
       const code = r.statusCode ?? 0
       if (code >= 300 && code < 400 && r.headers.location) {
         r.resume()

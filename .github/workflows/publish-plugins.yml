@@ -6,10 +6,10 @@
 #   · dry_run：默认 **true**（只打印要传什么、清单怎么变）—— 先看一遍再真发
 #
 # ── 为什么在这个仓库跑 ──────────────────────────────────────────────────────
-# Release 附件与清单都住在 `assets-plugins`（**公开**仓，用户的应用才不需要凭据就能下载）。
+# Release 附件与清单都住在 `assetshelper-plugins`（**公开**仓，用户的应用才不需要凭据就能下载）。
 # 默认的 `GITHUB_TOKEN` 只能写**本仓库**，所以发布动作放这里最省事：
 #   · 建 Release / 上传附件 / 提交清单 → `permissions: contents: write` + 默认 token ✓
-#   · 读两个**私有**源码仓（AssetsHelper + assets-plugins-official）→ 需要 `CI_SSH_KEY`
+#   · 读两个**私有**源码仓（AssetsHelper + assetshelper-plugins-official）→ 需要 `CI_SSH_KEY`
 #   （⚠️ 这个 secret 要加在**本仓库**的 Actions secrets 里，与 AssetsHelper 那个不共用）
 #
 # ── 与本地脚本的关系 ────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ on:
         required: false
         default: 'main'
       plugins_ref:
-        description: 'assets-plugins-official 的 ref（默认 main）'
+        description: 'assetshelper-plugins-official 的 ref（默认 main）'
         required: false
         default: 'main'
       dry_run:
@@ -75,7 +75,7 @@ jobs:
           ssh-keyscan -t ed25519,rsa github.com >> ~/.ssh/known_hosts 2>/dev/null
           ssh -T -o BatchMode=yes git@github.com || true
 
-      # 同级目录布局：本体的 `plugins-dir.mjs` 默认就在 `<本体>/../assets-plugins-official` 找插件源码
+      # 同级目录布局：本体的 `plugins-dir.mjs` 默认就在 `<本体>/../assetshelper-plugins-official` 找插件源码
       - name: 检出本体与插件仓库（按 ref）
         run: |
           fetch_repo() { # $1=owner/name  $2=目标目录  $3=ref
@@ -86,7 +86,7 @@ jobs:
             echo "  $2 → $(git -C "$2" log --oneline -1)"
           }
           fetch_repo "$HOST_REPO" ../AssetsHelper "${{ inputs.host_ref }}"
-          fetch_repo "$PLUGINS_REPO" ../assets-plugins-official "${{ inputs.plugins_ref }}"
+          fetch_repo "$PLUGINS_REPO" ../assetshelper-plugins-official "${{ inputs.plugins_ref }}"
 
       - name: 安装本体依赖（含 @assets/ui 的 git 依赖，走同一把 key）
         run: cd ../AssetsHelper && yarn install --frozen-lockfile

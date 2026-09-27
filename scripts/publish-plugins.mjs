@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * **把官方插件发布到 `assets-plugins` 的分发通道**（Release 附件 + 更新清单）。
+ * **把官方插件发布到 `assetshelper-plugins` 的分发通道**（Release 附件 + 更新清单）。
  *
  * ## 为什么是"显式选择器"
  *
@@ -222,7 +222,7 @@ async function ghApi(method, path, { token, body, extraHeaders = {} } = {}) {
       Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'assets-plugins-publish',
+      'User-Agent': 'assetshelper-plugins-publish',
       ...extraHeaders,
     },
     ...(body ? { body } : {}),
@@ -239,7 +239,7 @@ async function ensureRelease({ repo, tag, token }) {
   if (existing.status !== 404) throw new Error(`查询 Release 失败（HTTP ${existing.status}）：${existing.text.slice(0, 200)}`)
   const created = await ghApi('POST', `/repos/${repo}/releases`, {
     token,
-    body: JSON.stringify({ tag_name: tag, name: tag, body: `官方插件包（${tag}）。由 assets-plugins 的 publish-plugins 脚本上传。`, draft: false, prerelease: false }),
+    body: JSON.stringify({ tag_name: tag, name: tag, body: `官方插件包（${tag}）。由 assetshelper-plugins 的 publish-plugins 脚本上传。`, draft: false, prerelease: false }),
     extraHeaders: { 'Content-Type': 'application/json' },
   })
   if (!created.ok) throw new Error(`创建 Release 失败（HTTP ${created.status}）：${created.text.slice(0, 200)}`)
@@ -260,7 +260,7 @@ async function uploadAsset({ repo, releaseId, file, token, clobber }) {
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/octet-stream',
-      'User-Agent': 'assets-plugins-publish',
+      'User-Agent': 'assetshelper-plugins-publish',
     },
     body: readFileSync(file),
   })
