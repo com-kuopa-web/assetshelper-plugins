@@ -88,7 +88,7 @@ jobs:
           fetch_repo "$HOST_REPO" ../AssetsHelper "${{ inputs.host_ref }}"
           fetch_repo "$PLUGINS_REPO" ../assetshelper-plugins-official "${{ inputs.plugins_ref }}"
 
-      - name: 安装本体依赖（含 @assets/ui 的 git 依赖，走同一把 key）
+      - name: 安装本体依赖（含 web-ui 的 git 依赖，走同一把 key）
         run: cd ../AssetsHelper && yarn install --frozen-lockfile
 
       - name: 构建插件产物
